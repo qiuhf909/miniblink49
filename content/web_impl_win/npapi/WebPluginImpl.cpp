@@ -28,7 +28,6 @@
 #include "config.h"
 #include "content/web_impl_win/npapi/WebPluginImpl.h"
 
-#include "content/web_impl_win/WebCookieJarCurlImpl.h"
 #include "content/web_impl_win/npapi/PluginDatabase.h"
 #include "content/web_impl_win/npapi/PluginPackage.h"
 #include "content/web_impl_win/npapi/PluginMainThreadScheduler.h"
@@ -57,6 +56,8 @@
 #include "third_party/npapi/bindings/npapi.h"
 #include "gen/blink/core/HTMLNames.h"
 #include "wtf/text/WTFStringUtil.h"
+#include "wke/wkeWebView.h"
+#include "net/cookies/WebCookieJarCurlImpl.h"
 
 using std::min;
 
@@ -152,18 +153,16 @@ WebPluginImpl::WebPluginImpl(WebLocalFrame* parentFrame, const blink::WebPluginP
     if (!m_parentFrame)
         return;
 
+    findVirtualPluginByMime();
+
     // if we fail to find a plugin for this MIME type, findPlugin will search for
     // a plugin by the file extension and update the MIME type, so pass a mutable String
-    m_plugin = PluginDatabase::installedPlugins()->findPlugin(m_url, m_mimeType);
+    if (!m_plugin)
+        m_plugin = PluginDatabase::installedPlugins()->findPlugin(m_url, m_mimeType);
 
     // No plugin was found, try refreshing the database and searching again
     if (!m_plugin && PluginDatabase::installedPlugins()->refresh())
         m_plugin = PluginDatabase::installedPlugins()->findPlugin(m_url, m_mimeType);
-
-    if (!m_plugin) {
-        String mime("application/virtual-plugin");
-        m_plugin = PluginDatabase::installedPlugins()->findPlugin(m_url, mime);
-    }
 
     if (!m_plugin) {
         m_status = PluginStatusCanNotFindPlugin;
@@ -297,6 +296,27 @@ bool WebPluginImpl::start()
         return false;
 
     return true;
+}
+
+void WebPluginImpl::findVirtualPluginByMime()
+{
+    if (m_plugin)
+        return;
+
+    for (int i = 0; ; ++i) {
+        String mime = String::format("application/virtual-plugin-%d", i);
+        m_plugin = PluginDatabase::installedPlugins()->findPlugin(m_url, mime);
+
+        if (!m_plugin)
+            break;
+
+        if (!m_plugin->load())
+            continue;
+
+        NPError npErr = m_plugin->pluginFuncs()->newp((NPMIMEType)m_mimeType.utf8().data(), nullptr, 0, 0, nullptr, nullptr, nullptr);
+        if (NPERR_NO_ERROR == npErr)
+            break;
+    }   
 }
 
 void WebPluginImpl::mediaCanStart()
@@ -480,7 +500,11 @@ void WebPluginImpl::performRequest(PluginRequest* request)
 
         CString cstr;        
         if (result->IsString()) {
+#if V8_MAJOR_VERSION > 5
+            v8::Local<v8::String> v8String = result->ToString(toIsolate(m_parentFrame));
+#else
             v8::Local<v8::String> v8String = result->ToString();
+#endif
             resultString = v8StringToWebCoreString<String>(v8String, blink::Externalize);
             cstr = resultString.utf8();
         }
@@ -1190,10 +1214,9 @@ NPError WebPluginImpl::getValueForURL(NPNURLVariable variable, const char* url, 
     case NPNURLVCookie: {
         KURL u(m_parentFrame->document()->baseURL(), url);
         if (u.isValid()) {
-            //Frame* frame = getFrame(parentFrame(), m_element);
             LocalFrame* frame = parentFrame();
             if (frame) {
-                const CString cookieStr(WebCookieJarImpl::inst()->cookies(u, WebURL()).utf8().c_str());
+                const CString cookieStr(m_wkeWebview->getCookieJar()->cookies(u, WebURL()).utf8().c_str());
                 if (!cookieStr.isNull()) {
                     const int size = cookieStr.length();
                     *value = static_cast<char*>(NPN_MemAlloc(size+1));
@@ -1254,9 +1277,8 @@ NPError WebPluginImpl::setValueForURL(NPNURLVariable variable, const char* url, 
         KURL u(m_parentFrame->document()->baseURL(), url);
         if (u.isValid()) {
             const String cookieStr = String::fromUTF8(value, len);
-            //Frame* frame = getFrame(parentFrame(), m_element);
             if (!cookieStr.isEmpty())
-                WebCookieJarImpl::inst()->setCookie(u, WebURL(), cookieStr);
+                m_wkeWebview->getCookieJar()->setCookie(u, WebURL(), cookieStr);
         } else
             result = NPERR_INVALID_URL;
         break;
@@ -1406,6 +1428,19 @@ void WebPluginImpl::didFinishLoadingFrameRequest(const WebURL&, void* notifyData
 void WebPluginImpl::didFailLoadingFrameRequest(const WebURL&, void* notifyData, const WebURLError&)
 {
     DebugBreak();
+}
+
+int WebPluginImpl::printBegin(const blink::WebPrintParams& printParams)
+{ 
+    return 0;
+}
+
+void WebPluginImpl::printPage(int pageNumber, blink::WebCanvas* canvas)
+{
+}
+
+void WebPluginImpl::printEnd()
+{
 }
 
 } // namespace content

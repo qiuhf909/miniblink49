@@ -153,12 +153,12 @@ private:
         if (m_delayShowTimer.isActive())
             m_delayShowTimer.stop();
         m_delayShowCount = 0;
-        m_delayShowTimer.start(0.02, m_repeatInterval, FROM_HERE);
+        m_delayShowTimer.start(0.5, m_repeatInterval, FROM_HERE);
     }
 
     bool isNearPos(const POINT& a, const POINT& b)
     {
-        return std::abs(a.x - b.x) + std::abs(a.y - b.y) < 15;
+        return std::abs((int)(a.x - b.x)) + std::abs((int)(a.y - b.y)) < 15;
     }
 
     void delayShowTimerFired(blink::Timer<ToolTip>*)

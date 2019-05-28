@@ -21,6 +21,7 @@ public:
 NavigationController::NavigationController(WebPageImpl* page)
 {
     m_currentOffset = -1;
+    m_lastNavDirection = 0;
     m_page = page;
 }
 
@@ -44,8 +45,13 @@ int NavigationController::historyForwardListCount()
 // - The other item corresponds to the same set of documents, including frames (for history entries created via regular navigation)
 static bool shouldDoSameDocumentNavigationTo(const HistoryEntry* curItem, const HistoryEntry* otherItem)
 {
+#if 0
+    // 这里先注释调用。重现地址：usertest.sztaizhou.com
+    // 一共三个item，如果第一个到第二个item是same，第三个不是，那么如果从
+    // 第三个后退到第二个，就会因为same导致页面加载失败
     if (otherItem->m_isSameDocument)
         return true;
+#endif
 
     if (curItem == otherItem)
         return false;
@@ -76,10 +82,12 @@ void NavigationController::navigate(int offset)
         return;
     HistoryEntry* item = m_items[pos];
     HistoryEntry* curItem = nullptr;
-    if (m_currentOffset > 0 && m_currentOffset < m_items.size())
+    if (m_currentOffset >= 0 && m_currentOffset < (int)m_items.size())
         curItem = m_items[m_currentOffset];
     if (!curItem)
         return;
+
+    m_lastNavDirection = offset;
 
 #if 0 // def DEBUG
     OutputDebugStringA("navigate:\n");
@@ -111,10 +119,18 @@ void NavigationController::navigateToIndex(int index)
 
 int NavigationController::findEntry(const blink::WebHistoryItem& item) const
 {
-    for (size_t i = 0; i < m_items.size(); ++i) {
-        if (m_items[i]->urlString() == item.urlString())
-            return i;
+    if (m_lastNavDirection > 0) {
+        for (size_t i = m_currentOffset + 1; i < m_items.size(); ++i) {
+            if (m_items[i]->urlString() == item.urlString())
+                return i;
+        }
+    } else {
+        for (size_t i = m_currentOffset - 1; i >= 0; --i) {
+            if (m_items[i]->urlString() == item.urlString())
+                return i;
+        }
     }
+
     return -1;
 }
 

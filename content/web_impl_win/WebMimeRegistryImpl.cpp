@@ -77,6 +77,8 @@ blink::WebMimeRegistry::SupportsType WebMimeRegistryImpl::supportsMIMEType(const
             "multipart/related",
             "application/x-javascript",
             "application/xhtml+xml",
+            "application/json",
+            "application/pdf",
             "image/svg+xml",
             "image/jpeg",
             "image/png",
@@ -160,7 +162,6 @@ blink::WebMimeRegistry::SupportsType WebMimeRegistryImpl::supportsMediaMIMEType(
 {
     String typeString = type;
     if (wke::g_onIsMediaPlayerSupportsMIMETypeCallback) {
-
         std::string typeStr = type.utf8();
         bool isSupported = wke::g_onIsMediaPlayerSupportsMIMETypeCallback(typeStr.c_str());
         if (isSupported) // if (WTF::kNotFound != typeString.find("video/mp4"))
@@ -254,6 +255,14 @@ void WebMimeRegistryImpl::ensureMimeTypeMap()
     m_mimetypeMap->add("webm", "video/webm");
     m_mimetypeMap->add("mht", "multipart/related");
     m_mimetypeMap->add("mhtml", "multipart/related");
+
+    m_mimetypeMap->add("hex", "application/hex");
+    m_mimetypeMap->add("rbf", "application/rbf");
+    m_mimetypeMap->add("bin", "application/bin");
+    m_mimetypeMap->add("zip", "application/zip");
+    m_mimetypeMap->add("rar", "application/rar");
+    m_mimetypeMap->add("doc", "application/doc");
+    m_mimetypeMap->add("docx", "application/docx");
 }
 
 blink::WebString WebMimeRegistryImpl::mimeTypeForExtension(const blink::WebString& ext)

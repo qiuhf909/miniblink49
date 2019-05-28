@@ -1,7 +1,4 @@
 
-#define CURL_STATICLIB
-#define BUILDING_LIBCURL
-
 #include "net/WebURLLoaderManagerUtil.h"
 
 #include "net/WebURLLoaderInternal.h"
@@ -15,9 +12,7 @@
 #include <shlwapi.h>
 
 namespace net {
-
-char* g_cookieJarPath = nullptr;
-
+	
 CString certificatePath()
 {
 #if 0 
@@ -28,68 +23,6 @@ CString certificatePath()
     return CString();
 }
 
-void setCookieJarFullPath(const WCHAR* path)
-{
-    WTF::Mutex* mutex = sharedResourceMutex(CURL_LOCK_DATA_COOKIE);
-    WTF::Locker<WTF::Mutex> locker(*mutex);
-
-    if (!path)
-        return;
-
-    std::vector<char> jarPathA;
-    WTF::WCharToMByte(path, wcslen(path), &jarPathA, CP_ACP);
-    if (0 == jarPathA.size())
-        return;
-
-    if (g_cookieJarPath)
-        free(g_cookieJarPath);
-
-    const int pathLen = (MAX_PATH + 1) * sizeof(char) * 5;
-    g_cookieJarPath = (char*)malloc(pathLen);
-    memset(g_cookieJarPath, 0, pathLen);
-
-    strncpy(g_cookieJarPath, &jarPathA[0], jarPathA.size());
-}
-
-void setCookieJarPath(const WCHAR* path)
-{
-    WTF::Mutex* mutex = sharedResourceMutex(CURL_LOCK_DATA_COOKIE);
-    WTF::Locker<WTF::Mutex> locker(*mutex);
-
-    if (!path || !::PathIsDirectoryW(path))
-        return;
-
-    Vector<WCHAR> jarPath;
-    jarPath.resize(MAX_PATH + 1);
-    wcscpy(jarPath.data(), path);
-    ::PathAppendW(jarPath.data(), L"cookies.dat");
-
-    setCookieJarFullPath(jarPath.data());
-}
-
-char* cookieJarPath()
-{
-    WTF::Mutex* mutex = sharedResourceMutex(CURL_LOCK_DATA_COOKIE);
-    WTF::Locker<WTF::Mutex> locker(*mutex);
-
-    if (g_cookieJarPath)
-        return g_cookieJarPath;
-
-    char* cookieJarPathStr = "cookies.dat";
-    g_cookieJarPath = (char*)malloc(strlen(cookieJarPathStr) + 1);
-    strcpy(g_cookieJarPath, cookieJarPathStr);
-
-    return g_cookieJarPath;
-}
-
-void freeJarPath()
-{
-    WTF::Mutex* mutex = sharedResourceMutex(CURL_LOCK_DATA_COOKIE);
-    WTF::Locker<WTF::Mutex> locker(*mutex);
-
-    if (g_cookieJarPath)
-        free(g_cookieJarPath);
-}
 
 #if ENABLE(WEB_TIMING)
 int milisecondsSinceRequest(double requestTime)
@@ -320,7 +253,7 @@ private:
         Vector<char> buffer;
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
         int res = curl_easy_perform(curl);
-        if (CURLE_OK != res) {
+        if (CURLE_OK != res || 0 == buffer.size()) {
             curl_easy_cleanup(curl);
             blink::Platform::current()->mainThread()->postTask(FROM_HERE, WTF::bind(onNetGetFaviconFinish, jobId, webviewId));
             return;

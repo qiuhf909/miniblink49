@@ -5,7 +5,7 @@
 #include "third_party/WebKit/Source/wtf/RefCountedLeakCounter.h"
 #include "third_party/WebKit/Source/wtf/text/CString.h"
 #include "third_party/WebKit/Source/wtf/text/WTFStringUtil.h"
-#include "curl/curl.h"
+#include "third_party/libcurl/include/curl/curl.h"
 #include "wke/wkedefine.h"
 
 namespace WTF {
@@ -21,12 +21,6 @@ const int maxRunningJobs = 5;
 const bool ignoreSSLErrors = true; //  ("WEBKIT_IGNORE_SSL_ERRORS");
 const int kAllowedProtocols = CURLPROTO_FILE | CURLPROTO_FTP | CURLPROTO_FTPS | CURLPROTO_HTTP | CURLPROTO_HTTPS;
 
-extern char* g_cookieJarPath;
-
-void setCookieJarFullPath(const WCHAR* path);
-void setCookieJarPath(const WCHAR* path);
-char* cookieJarPath();
-void freeJarPath();
 CString certificatePath();
 
 #if ENABLE(WEB_TIMING)

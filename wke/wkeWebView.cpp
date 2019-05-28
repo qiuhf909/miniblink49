@@ -6,9 +6,9 @@
 
 #include "wke/wkeWebView.h"
 #include "wke/wkeJsBind.h"
+#include "wke/wkeGlobalVar.h"
 
 #include "content/web_impl_win/BlinkPlatformImpl.h"
-#include "content/web_impl_win/WebCookieJarCurlImpl.h"
 #include "content/browser/WebFrameClientImpl.h"
 #include "third_party/WebKit/public/platform/WebDragData.h"
 #include "third_party/WebKit/public/platform/WebThread.h"
@@ -20,6 +20,8 @@
 #include "third_party/WebKit/Source/bindings/core/v8/ExceptionState.h"
 #include "third_party/WebKit/Source/wtf/text/WTFStringUtil.h"
 #include "net/ActivatingObjCheck.h"
+#include "net/WebURLLoaderManagerUtil.h"
+#include "net/cookies/WebCookieJarCurlImpl.h"
 
 #undef  PURE
 #define PURE = 0;
@@ -27,7 +29,7 @@
 
 namespace wke {
 
-CWebView::CWebView()
+CWebView::CWebView(COLORREF color)
     : m_hWnd(NULL)
     , m_transparent(false)
     , m_width(0)
@@ -44,17 +46,20 @@ CWebView::CWebView()
     m_id = net::ActivatingObjCheck::inst()->genId();
     net::ActivatingObjCheck::inst()->add(m_id);
 
-    _initPage();
+    _initPage(color);
     _initHandler();
     _initMemoryDC();
 
     m_settings.size = 0;
     m_webPage->wkeHandler().isWke = true;
+
+    g_liveWebViews.insert(this);
 }
 
 CWebView::~CWebView()
 {
     net::ActivatingObjCheck::inst()->remove(m_id);
+    g_liveWebViews.erase(this);
     m_webPage->close();
 }
 
@@ -645,8 +650,12 @@ const utf8* CWebView::cookie()
     if (webDocument.isNull())
         return "";
 
+    net::WebCookieJarImpl* cookieJar = getCookieJar();
+    if (!cookieJar)
+        return "";
+
     const blink::Document* doc = webDocument.constUnwrap<blink::Document>();
-    m_cookie = content::WebCookieJarImpl::cookiesForSession(KURL(), doc->cookieURL(), true);
+    m_cookie = cookieJar->getCookiesForSession(KURL(), doc->cookieURL(), true);
 
     return m_cookie.string();
 }
@@ -777,12 +786,12 @@ bool CWebView::fireKeyUpEvent(unsigned int virtualKeyCode, unsigned int flags, b
 bool CWebView::fireKeyDownEvent(unsigned int virtualKeyCode, unsigned int flags, bool systemKey)
 {
     WPARAM wParam = virtualKeyCode;
-    LPARAM lParam = 0;
+    LPARAM lParam = flags;
 
-    if (flags & WKE_REPEAT)
-        lParam |= ((KF_REPEAT) >> 16);
-    if (flags & WKE_EXTENDED)
-        lParam |= ((KF_EXTENDED) >> 16);
+//     if (flags & WKE_REPEAT)
+//         lParam |= ((KF_REPEAT) >> 16);
+//     if (flags & WKE_EXTENDED)
+//         lParam |= ((KF_EXTENDED) >> 16);
 
     m_webPage->fireKeyDownEvent(m_webPage->getHWND(), WM_KEYDOWN, wParam, lParam);
     return true;
@@ -791,12 +800,12 @@ bool CWebView::fireKeyDownEvent(unsigned int virtualKeyCode, unsigned int flags,
 bool CWebView::fireKeyPressEvent(unsigned int charCode, unsigned int flags, bool systemKey)
 {
     WPARAM wParam = charCode;
-    LPARAM lParam = 0;
+    LPARAM lParam = flags;
 
-    if (flags & WKE_REPEAT)
-        lParam |= ((KF_REPEAT) >> 16);
-    if (flags & WKE_EXTENDED)
-        lParam |= ((KF_EXTENDED) >> 16);
+//     if (flags & WKE_REPEAT)
+//         lParam |= ((KF_REPEAT) >> 16);
+//     if (flags & WKE_EXTENDED)
+//         lParam |= ((KF_EXTENDED) >> 16);
 
     m_webPage->fireKeyPressEvent(m_webPage->getHWND(), WM_CHAR, wParam, lParam);
     return true;
@@ -1035,8 +1044,50 @@ void CWebView::onPromptBox(wkePromptBoxCallback callback, void* callbackParam)
     m_webPage->wkeHandler().promptBoxCallbackParam = callbackParam;
 }
 
+static LRESULT CALLBACK hideWindowWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+static HWND createHideWnd()
+{
+    static HWND s_hWnd = nullptr;
+    if (s_hWnd) {
+        return s_hWnd;
+    }
+    const LPCWSTR kWindowClassName = L"MiniBlinkAlertWindowClass";
+
+    WNDCLASSEX wcex = { 0 };
+    wcex.cbSize = sizeof(WNDCLASSEX);
+    wcex.lpfnWndProc = hideWindowWndProc;
+    wcex.hInstance = ::GetModuleHandle(NULL);
+    wcex.lpszClassName = kWindowClassName;
+    ::RegisterClassEx(&wcex);
+
+    s_hWnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW,        // window ex-style
+        kWindowClassName,    // window class name
+        L"HideTopMostWnd", // window caption
+        WS_POPUP & (~WS_CAPTION) & (~WS_SYSMENU) & (~WS_SIZEBOX), // window style
+        1,              // initial x position
+        1,              // initial y position
+        1,          // initial x size
+        1,         // initial y size
+        NULL,         // parent window handle
+        NULL,           // window menu handle
+        GetModuleHandleW(NULL),           // program instance handle
+        NULL);         // creation parameters
+
+    return s_hWnd;
+}
+
 void defaultRunAlertBox(wkeWebView webView, void* param, const wkeString msg)
 {
+    HWND hWnd = createHideWnd();
+    ::SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    ::SetForegroundWindow(hWnd);
+    ::ShowWindow(hWnd, SW_SHOW);
+
     const int maxShowLength = 500;
     Vector<wchar_t> msgBuf;
     const wchar_t* msgString = wkeGetStringW(msg);
@@ -1052,7 +1103,9 @@ void defaultRunAlertBox(wkeWebView webView, void* param, const wkeString msg)
         msgBuf[maxShowLength - 7] = L'.';
         msgString = msgBuf.data();
     }
-    MessageBoxW(NULL, msgString, L"wke", MB_OK);
+    MessageBoxW(hWnd, msgString, L"Miniblink", MB_OK);
+
+    ::ShowWindow(hWnd, SW_HIDE);
 }
 
 bool defaultRunConfirmBox(wkeWebView webView, void* param, const wkeString msg)
@@ -1073,11 +1126,11 @@ void CWebView::_initHandler()
     m_webPage->wkeHandler().promptBoxCallback = defaultRunPromptBox;
 }
 
-void CWebView::_initPage()
+void CWebView::_initPage(COLORREF color)
 {
     m_webPage = new content::WebPage(nullptr);
     m_webPage->initWkeWebView(this);
-    m_webPage->init(nullptr);
+    m_webPage->init(nullptr, color);
 
 //     blink::Page::PageClients pageClients;
 //     pageClients.chromeClient = new ChromeClient(this);
@@ -1155,6 +1208,12 @@ void CWebView::onDownload(wkeDownloadCallback callback, void* callbackParam)
     m_webPage->wkeHandler().downloadCallbackParam = callbackParam;
 }
 
+void CWebView::onDownload2(wkeDownload2Callback callback, void* callbackParam)
+{
+    m_webPage->wkeHandler().download2Callback = callback;
+    m_webPage->wkeHandler().download2CallbackParam = callbackParam;
+}
+
 void CWebView::onNetResponse(wkeNetResponseCallback callback, void* callbackParam)
 {
     m_webPage->wkeHandler().netResponseCallback = callback;
@@ -1197,6 +1256,12 @@ void CWebView::onLoadUrlEnd(wkeLoadUrlEndCallback callback, void* callbackParam)
     m_webPage->wkeHandler().loadUrlEndCallbackParam = callbackParam;
 }
 
+void CWebView::onLoadUrlFail(wkeLoadUrlFailCallback callback, void* callbackParam)
+{
+    m_webPage->wkeHandler().loadUrlFailCallback = callback;
+    m_webPage->wkeHandler().loadUrlFailCallbackParam = callbackParam;
+}
+
 void CWebView::onDidCreateScriptContext(wkeDidCreateScriptContextCallback callback, void* callbackParam)
 {
     m_webPage->wkeHandler().didCreateScriptContextCallback = callback;
@@ -1215,6 +1280,12 @@ void CWebView::onOtherLoad(wkeOnOtherLoadCallback callback, void* callbackParam)
     m_webPage->wkeHandler().otherLoadCallbackParam = callbackParam;
 }
 
+void CWebView::onContextMenuItemClick(wkeOnContextMenuItemClickCallback callback, void* callbackParam)
+{
+    m_webPage->wkeHandler().contextMenuItemClickCallback = callback;
+    m_webPage->wkeHandler().contextMenuItemClickCallbackParam = callbackParam;
+}
+
 void CWebView::onDraggableRegionsChanged(wkeDraggableRegionsChangedCallback callback, void* callbackParam)
 {
     m_webPage->wkeHandler().draggableRegionsChangedCallback = callback;
@@ -1225,6 +1296,12 @@ void CWebView::onStartDragging(wkeStartDraggingCallback callback, void* callback
 {
     m_webPage->wkeHandler().startDraggingCallback = callback;
     m_webPage->wkeHandler().startDraggingCallbackParam = callbackParam;
+}
+
+void CWebView::onPrint(wkeOnPrintCallback callback, void* callbackParam)
+{
+    m_webPage->wkeHandler().printCallback = callback;
+    m_webPage->wkeHandler().printCallbackParam = callbackParam;
 }
 
 void CWebView::setClientHandler(const wkeClientHandler* handler)
@@ -1267,6 +1344,11 @@ int CWebView::getCursorInfoType()
     return m_webPage->getCursorInfoType();
 }
 
+void CWebView::setCursorInfoType(int type)
+{
+    m_webPage->setCursorInfoType(type);
+}
+
 void CWebView::setDragFiles(const POINT* clintPos, const POINT* screenPos, wkeString files[], int filesCount)
 {
     blink::WebPoint clientPoint(clintPos->x, clintPos->y);
@@ -1276,8 +1358,7 @@ void CWebView::setDragFiles(const POINT* clintPos, const POINT* screenPos, wkeSt
     webDragData.initialize();
 
     for (int i = 0; i < filesCount; ++i) {
-        WTF::String file = files[i]->original();
-        //GetFileSizeEx();
+        WTF::String file = WTF::String::fromUTF8(files[i]->string());
         file.insert("file:///", 0);
     
         blink::WebDragData::Item it;
@@ -1297,7 +1378,7 @@ void CWebView::setNetInterface(const char* netInterface)
     m_netInterface = netInterface;
 }
 
-void CWebView::setProxyInfo(const String& host,	unsigned long port,	net::ProxyType type, const String& username, const String& password)
+void CWebView::setProxyInfo(const String& host, unsigned long port, net::ProxyType type, const String& username, const String& password)
 {
     m_proxyType = type;
 
@@ -1368,37 +1449,54 @@ void CWebView::showDevTools(const utf8* url, wkeOnShowDevtoolsCallback callback,
     blink::Platform::current()->currentThread()->addTaskObserver(new ShowDevToolsTaskObserver(this, url, callback, param));
 }
 
+net::WebCookieJarImpl* CWebView::getCookieJar()
+{
+    if (!m_webPage)
+        return nullptr;
+
+    return m_webPage->getCookieJar();
+}
+
+CURLSH* CWebView::getCurlShareHandle()
+{
+    CURLSH* curlsh = nullptr;
+    if (m_webPage && m_webPage->getPageNetExtraData()) {
+        curlsh = m_webPage->getPageNetExtraData()->getCurlShareHandle();
+        return curlsh;
+    }
+
+    curlsh = net::WebURLLoaderManager::sharedInstance()->getCurlShareHandle();
+    return curlsh;
+}
+
+std::string CWebView::getCookieJarPath()
+{
+    std::string cookiesData;
+    if (m_webPage && m_webPage->getPageNetExtraData()) {
+        cookiesData = m_webPage->getPageNetExtraData()->getCookieJarFullPath();
+        return cookiesData;
+    }
+
+    net::WebURLLoaderManager* manager = net::WebURLLoaderManager::sharedInstance();
+    if (!manager)
+        return "";
+
+    cookiesData = manager->getShareCookieJar()->getCookieJarFullPath();
+    return cookiesData;
+}
+
+void CWebView::setCookieJarFullPath(const utf8* path)
+{
+    if (m_webPage)
+        m_webPage->setCookieJarFullPath(path);
+}
+
+void CWebView::setLocalStorageFullPath(const utf8* path)
+{
+    if (m_webPage)
+        m_webPage->setLocalStorageFullPath(path);
+}
+
 } // namespace wke
-
-//static Vector<wke::CWebView*> s_webViews;
-
-wkeWebView wkeCreateWebView()
-{
-    wke::CWebView* webView = new wke::CWebView();
-    webView->webPage()->setNeedAutoDrawToHwnd(false);
-
-    //s_webViews.append(webView);
-    return webView;
-}
-
-void wkeDestroyWebView(wkeWebView webView)
-{
-    if (!webView)
-        return;
-
-    if (webView->getWkeHandler()->windowDestroyCallback)
-        webView->getWkeHandler()->windowDestroyCallback(webView, webView->getWkeHandler()->windowDestroyCallbackParam);
-
-    net::ActivatingObjCheck::inst()->remove(webView->getId());
-
-    //size_t pos = s_webViews.find(webView);
-
-    //ASSERT(pos != notFound);
-    //if (pos != notFound)
-    //{
-    //    s_webViews.remove(pos);
-        delete webView;
-    //}
-}
 
 #endif

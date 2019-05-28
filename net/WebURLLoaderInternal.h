@@ -41,12 +41,11 @@
 #include "third_party/WebKit/Source/wtf/FastAllocBase.h"
 #include "third_party/WebKit/public/platform/WebURLLoaderClient.h"
 #include "third_party/WebKit/Source/wtf/OwnPtr.h"
-
 #include <windows.h>
 #include <memory>
-
-#define CURL_STATICLIB 
 #include "third_party/libcurl/include/curl/curl.h"
+
+#define MINIBLINK_NO_MULTITHREAD_NET 1
 
 // The allocations and releases in WebURLLoaderInternal are
 // Cocoa-exception-free (either simple Foundation classes or
@@ -60,6 +59,8 @@ namespace content {
 class WebURLLoaderImplCurl;
 }
 
+typedef struct _wkeNetJobDataBind wkeNetJobDataBind;
+
 using namespace blink;
 using namespace content;
 
@@ -69,6 +70,7 @@ class WebURLLoaderManagerMainTask;
 class WebURLLoaderManager;
 class FlattenHTTPBodyElementStream;
 struct InitializeHandleInfo;
+struct DiskCacheItem;
 
 class JobHead {
 public:
@@ -102,7 +104,22 @@ public:
     WebURLLoaderImplCurl* loader() { return m_loader; }
     void setLoader(WebURLLoaderImplCurl* loader) { m_loader = loader; }
 
-    blink::WebURLRequest* firstRequest() { return m_firstRequest; }
+    blink::WebURLRequest* firstRequest()
+    {
+#ifndef MINIBLINK_NO_MULTITHREAD_NET
+        RELEASE_ASSERT(WTF::isMainThread());
+#endif
+        return m_firstRequest; 
+    }
+
+    void resetFirstRequest(blink::WebURLRequest* newRequest)
+    {
+#ifndef MINIBLINK_NO_MULTITHREAD_NET
+        RELEASE_ASSERT(WTF::isMainThread() && m_firstRequest);
+#endif
+        delete m_firstRequest;
+        m_firstRequest = newRequest;
+    }
 
     bool isCancelled() const { return kNoCancelled != m_cancelledReason; }
 
@@ -110,13 +127,19 @@ public:
     WebURLLoaderClient* m_client;
     bool m_isSynchronous;
 
+private:
     blink::WebURLRequest* m_firstRequest;
 
+public:
+    WebURLResponse m_response;
+    char* m_url; // 设置给curl的地址。和request可能不同，主要是fragment
     String m_lastHTTPMethod;
 
     // Suggested credentials for the current redirection step.
     String m_user;
     String m_pass;
+
+    bool m_isRedirection;
 
     //Credential m_initialCredential;
 
@@ -128,10 +151,10 @@ public:
     bool m_shouldContentSniff;
 
     CURL* m_handle;
-    char* m_url; // 设置给curl的地址。和request可能不同，主要是fragment
+    
     std::string m_effectiveUrl; // curl收到网络包后返回的最后有效地址，如果有重定向redirect，则可能和上面的变量不同
     struct curl_slist* m_customHeaders;
-    WebURLResponse m_response;
+    
     OwnPtr<MultipartHandle> m_multipartHandle;
 
     CancelledReason m_cancelledReason;
@@ -168,6 +191,7 @@ public:
     bool m_isDataUrl;
     bool m_isProxy;
     bool m_isProxyHeadRequest;
+    bool m_needParseMime; // 如果response为空的时候，是否需要在recv data的时候分析
 
     InitializeHandleInfo* m_initializeHandleInfo;
     bool m_isHoldJobToAsynCommit;
@@ -177,7 +201,22 @@ public:
     Vector<char>* m_hookBufForEndHook;
     Vector<char>* m_asynWkeNetSetData;
     bool m_isWkeNetSetDataBeSetted;
+
+    bool m_hasCallResponse; // 是否有head call被调用过。如果没有的话，且又有write call 提前调用了，就需要缓存数据给下载
+
+    enum CacheForDownloadOpt {
+        kCacheForDownloadUnknow,
+        kCacheForDownloadNot,
+        kCacheForDownloadYes,
+    };
+
+    CacheForDownloadOpt m_cacheForDownloadOpt;
+    wkeNetJobDataBind* m_dataBind;
+    Vector<char> m_dataCacheForDownload; // 下载时需要先缓存再给外部
 #endif
+
+    DiskCacheItem* m_diskCacheItem;
+
     RefPtr<PageNetExtraData> m_pageNetExtraData;
 };
 
